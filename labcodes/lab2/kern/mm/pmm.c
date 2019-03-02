@@ -326,7 +326,7 @@ pmm_init(void) {
 // return vaule: the kernel virtual address of this pte
 pte_t *
 get_pte(pde_t *pgdir, uintptr_t la, bool create) {
-    /* LAB2 EXERCISE 2: YOUR CODE
+    /* LAB2 EXERCISE 2: YOUR 2016011383
      *
      * If you need to visit a physical address, please use KADDR()
      * please read pmm.h for useful macros
@@ -359,6 +359,18 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
     }
     return NULL;          // (8) return page table entry
 #endif
+    uint32_t* pd = pgdir + PDX(la);     //找到虚拟页号            
+    if (!(*pd & PTE_P)){                //判断是否present，不present的话根据create判断是否创建
+        if (!create) return NULL;
+        struct Page *page = alloc_page();   
+        if (page == NULL) return NULL;
+        uint32_t pa = page2pa(page);        //找到撞见的起始物理位置
+        set_page_ref(page, 1);              // 
+        memset(KADDR(pa), 0, sizeof(struct Page));  //初始化内核虚拟内存
+        *pd = (pa) | PTE_P | PTE_W | PTE_U;     //计算页目录项内容
+    }
+    // 返回二级页表
+    return ((pte_t *)KADDR(PDE_ADDR(*pd))) + PTX(la);
 }
 
 //get_page - get related Page struct for linear address la using PDT pgdir
@@ -379,7 +391,7 @@ get_page(pde_t *pgdir, uintptr_t la, pte_t **ptep_store) {
 //note: PT is changed, so the TLB need to be invalidate 
 static inline void
 page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
-    /* LAB2 EXERCISE 3: YOUR CODE
+    /* LAB2 EXERCISE 3: 2016011383
      *
      * Please check if ptep is valid, and tlb must be manually updated if mapping is updated
      *
@@ -404,6 +416,23 @@ page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
                                   //(6) flush tlb
     }
 #endif
+    uint32_t* pd = pgdir + PDX(la);
+    // 检测参数合法性
+    if (&((pte_t *)KADDR(PDE_ADDR(*pd)))[PTX(la)] != ptep){
+        cprintf("Wrong with the parameter!\n");
+        return;
+    }
+    // 检测是否present
+    if (*ptep & PTE_P){
+        // 找到页表
+        struct Page* page = pte2page(*ptep);
+        if (page == NULL) return;
+        page_ref_dec(page);
+        //将ref--， 如果为0则invalid_tlb
+        if (page_ref(page) == 0){
+            tlb_invalidate(pgdir, la);
+        }
+    }
 }
 
 //page_remove - free an Page which is related linear address la and has an validated pte
@@ -487,6 +516,7 @@ check_pgdir(void) {
 
     assert(page_insert(boot_pgdir, p1, PGSIZE, 0) == 0);
     assert(page_ref(p1) == 2);
+//    cprintf("page_ref(p2)=%d\n",page_ref(p2));
     assert(page_ref(p2) == 0);
     assert((ptep = get_pte(boot_pgdir, PGSIZE, 0)) != NULL);
     assert(pte2page(*ptep) == p1);
